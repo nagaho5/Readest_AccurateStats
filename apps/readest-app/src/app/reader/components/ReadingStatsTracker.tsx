@@ -34,6 +34,8 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   const getBookData = useBookDataStore((s) => s.getBookData);
   const { user } = useAuth();
   const coreRef = useRef(new TrackerCore(DEFAULT_STATS_TRACKING_CONFIG));
+  // Desktop focus is separate from WebView visibility (notably on Windows).
+  const focusedRef = useRef(true);
   const dbRef = useRef<StatisticsDb | null>(null);
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -129,7 +131,8 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   };
 
   const openPageAt = (info: { current?: number; total: number } | undefined) => {
-    if (!info) return;
+    if (!info || !focusedRef.current || document.visibilityState === 'hidden' || ttsPlayingRef.current)
+      return;
     void persist(coreRef.current.onPage((info.current ?? 0) + 1, info.total || 1, nowSec()));
     armIdle();
   };
@@ -165,18 +168,60 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookKey]);
 
-  // Tab/window visibility.
+  const pause = () => {
+    if (idleRef.current) clearTimeout(idleRef.current);
+    idleRef.current = null;
+    void persist(coreRef.current.onHide(nowSec()));
+  };
+
+  const resume = () => openPageAt(getBookProgress(bookKey)?.pageinfo);
+
+  // Keep the existing visibility handling for web/mobile and as a desktop
+  // fallback. Resuming must open a fresh dwell even without a page turn.
   useEffect(() => {
     const onVis = () => {
-      if (document.visibilityState === 'hidden') {
-        if (idleRef.current) clearTimeout(idleRef.current);
-        void persist(coreRef.current.onHide(nowSec()));
-      }
+      if (document.visibilityState === 'hidden') pause();
+      else if (focusedRef.current) resume();
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookMd5]);
+  }, [bookKey, bookMd5]);
+
+  // On desktop, visibilitychange is unreliable for Alt+Tab and minimizing.
+  // Use the native window focus state, including its initial value.
+  useEffect(() => {
+    if (!appService?.isDesktopApp) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    let focusEventReceived = false;
+    const subscribe = async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      const onFocus = (focused: boolean) => {
+        if (disposed) return;
+        focusedRef.current = focused;
+        if (focused) resume();
+        else pause();
+      };
+      unlisten = await appWindow.onFocusChanged(({ payload }) => {
+        focusEventReceived = true;
+        onFocus(payload);
+      });
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      const initiallyFocused = await appWindow.isFocused();
+      if (!focusEventReceived) onFocus(initiallyFocused);
+    };
+    void subscribe().catch((err) => console.warn('[stats] focus listener unavailable:', err));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appService?.isDesktopApp, bookKey, bookMd5]);
 
   // Book close (unmount).
   useEffect(() => {
