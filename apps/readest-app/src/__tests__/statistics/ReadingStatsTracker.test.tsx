@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   getBookData: vi.fn(() => null as unknown),
   progress: null as BookProgress | null,
   playbackState: null as 'playing' | 'paused' | null,
+  isDesktopApp: false,
+  isFocused: vi.fn().mockResolvedValue(true),
+  focusListener: null as null | ((event: { payload: boolean }) => void),
   db: {
     upsertBook: vi.fn(),
     insertPageEvent: vi.fn(),
@@ -14,7 +17,20 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@/context/EnvContext', () => ({ useEnv: () => ({ appService: {} }) }));
+vi.mock('@/context/EnvContext', () => ({
+  useEnv: () => ({ appService: { isDesktopApp: mocks.isDesktopApp } }),
+}));
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    isFocused: mocks.isFocused,
+    onFocusChanged: (listener: (event: { payload: boolean }) => void) => {
+      mocks.focusListener = listener;
+      return Promise.resolve(() => {
+        mocks.focusListener = null;
+      });
+    },
+  }),
+}));
 vi.mock('@/context/AuthContext', () => ({ useAuth: () => ({ user: null }) }));
 vi.mock('@/store/readerProgressStore', () => ({
   useBookProgress: () => mocks.progress,
@@ -176,5 +192,128 @@ describe('ReadingStatsTracker while TTS plays', () => {
     await settle();
 
     expect(mocks.db.insertPageEvent).toHaveBeenCalled();
+  });
+});
+
+describe('ReadingStatsTracker desktop focus accounting', () => {
+  const BOOK_KEY = 'hash1-view1';
+
+  const setPage = (current: number) => {
+    mocks.progress = {
+      pageinfo: { current, next: current + 1, total: 100 },
+    } as unknown as BookProgress;
+  };
+
+  const settle = async (ms = 0) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  const focus = async (focused: boolean) => {
+    expect(mocks.focusListener).not.toBeNull();
+    await act(async () => {
+      mocks.focusListener?.({ payload: focused });
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-09T12:00:00Z'));
+    vi.clearAllMocks();
+    mocks.isDesktopApp = true;
+    mocks.focusListener = null;
+    mocks.isFocused.mockResolvedValue(true);
+    mocks.open.mockResolvedValue(mocks.db);
+    mocks.db.upsertBook.mockResolvedValue(1);
+    mocks.db.insertPageEvent.mockResolvedValue(undefined);
+    mocks.db.recomputeBookTotals.mockResolvedValue(undefined);
+    mocks.getBookData.mockReturnValue({
+      book: { hash: 'md5-1', title: 'Book', author: 'Author' },
+    } as unknown as null);
+    mocks.playbackState = null;
+    setPage(0);
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.isDesktopApp = false;
+    mocks.focusListener = null;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('excludes unfocused time and resumes on the same page without a turn', async () => {
+    const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    await settle(20_000);
+    await focus(false);
+    await settle(60_000);
+    await focus(true);
+    await settle(30_000);
+    setPage(1);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    const events = mocks.db.insertPageEvent.mock.calls.map((call) => call[1]);
+    expect(events.map((event) => event.duration)).toEqual([20, 30]);
+    expect(events.map((event) => event.page)).toEqual([1, 1]);
+  });
+
+  it('does not start an offscreen dwell when progress changes in the background', async () => {
+    const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    await settle(15_000);
+    await focus(false);
+    await settle(40_000);
+    setPage(1);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle(25_000);
+    await focus(true);
+    await settle(25_000);
+    setPage(2);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    const events = mocks.db.insertPageEvent.mock.calls.map((call) => call[1]);
+    expect(events.map((event) => event.duration)).toEqual([15, 25]);
+    expect(events.map((event) => event.page)).toEqual([1, 2]);
+  });
+
+  it('starts paused when the desktop window is already unfocused', async () => {
+    mocks.isFocused.mockResolvedValue(false);
+    const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+    await settle(40_000);
+    expect(mocks.db.insertPageEvent).not.toHaveBeenCalled();
+
+    await focus(true);
+    await settle(25_000);
+    setPage(1);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    const events = mocks.db.insertPageEvent.mock.calls.map((call) => call[1]);
+    expect(events.map((event) => event.duration)).toEqual([25]);
+  });
+
+  it('does not resume manual reading while TTS is playing', async () => {
+    const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+    await settle(20_000);
+    await focus(false);
+    await act(async () => {
+      await eventDispatcher.dispatch('tts-playback-state', { bookKey: BOOK_KEY, state: 'playing' });
+    });
+    await focus(true);
+    await settle(30_000);
+    setPage(1);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    const events = mocks.db.insertPageEvent.mock.calls.map((call) => call[1]);
+    expect(events.map((event) => event.duration)).toEqual([20]);
   });
 });
