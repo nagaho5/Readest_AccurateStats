@@ -48,6 +48,9 @@ vi.mock('@/services/statistics/statsSync', () => ({
 }));
 vi.mock('@/services/sync/syncCategories', () => ({ isSyncCategoryEnabled: () => false }));
 vi.mock('@/libs/sync', () => ({ SyncClient: class {} }));
+vi.mock('@/store/settingsStore', () => ({
+  useSettingsStore: { getState: () => ({ settings: { bookorbit: { enabled: false } } }) },
+}));
 vi.mock('@/services/tts/TTSSessionManager', () => ({
   ttsSessionManager: {
     getPlaybackState: () => mocks.playbackState,
