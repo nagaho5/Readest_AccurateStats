@@ -302,6 +302,25 @@ describe('ReadingStatsTracker desktop focus accounting', () => {
     expect(events.map((event) => event.duration)).toEqual([25]);
   });
 
+  it('ignores document visibility changes on desktop and relies on native focus', async () => {
+    const visibilityState = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockReturnValue('visible');
+    const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    await settle(10_000);
+    visibilityState.mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    await settle(20_000);
+    setPage(1);
+    rerender(<ReadingStatsTracker bookKey={BOOK_KEY} />);
+    await settle();
+
+    const events = mocks.db.insertPageEvent.mock.calls.map((call) => call[1]);
+    expect(events.map((event) => event.duration)).toEqual([30]);
+  });
+
   it('does not resume manual reading while TTS is playing', async () => {
     const { rerender } = render(<ReadingStatsTracker bookKey={BOOK_KEY} />);
     await settle();
