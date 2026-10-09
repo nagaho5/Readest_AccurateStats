@@ -1,0 +1,64 @@
+name: Publish AccurateStats prerelease
+
+on:
+  push:
+    branches:
+      - release/v0.12.12-accuratestats.1
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified Windows artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          gh run download 37900774111             --repo "${GITHUB_REPOSITORY}"             --name "Readest-AccurateStats-Windows-x64"             --dir release-assets
+
+      - name: Verify expected file and generate SHA256
+        run: |
+          test -f release-assets/Readest_AccurateStats_0.12.12_x64.exe
+          cd release-assets
+          sha256sum Readest_AccurateStats_0.12.12_x64.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Readest AccurateStats 0.12.12
+
+          First Windows x64 test build of the AccurateStats fork.
+
+          ### What changed
+          - Pause manual reading-time tracking when the Readest desktop window loses focus.
+          - Resume tracking immediately when focus returns, even on the same page.
+          - Avoid starting a new manual-reading dwell while the app is unfocused.
+          - Preserve the existing TTS statistics behavior.
+          - Disable the upstream in-app updater in this personal build so the patch is not overwritten automatically.
+
+          ### Data compatibility
+          - No database schema changes.
+          - No changes to book storage, settings format, backup format, or statistics sync format.
+          - Uses the normal Readest data/config locations, so it shares the installed Readest library, settings, progress, and statistics.
+          - Do not run the official build and this build at the same time.
+          - Do not place a settings.json next to this EXE, or Readest may switch into portable-data mode.
+
+          ### Build
+          - Windows x64
+          - Based on Readest 0.12.12
+          - Standalone EXE; no installer is required.
+          - This binary is not signed with the official Readest code-signing certificate, so Windows SmartScreen may show an unrecognized-app warning.
+
+          SHA256 is attached in SHA256SUMS.txt.
+          EOF
+
+      - name: Create prerelease and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v0.12.12-accuratestats.1"             release-assets/Readest_AccurateStats_0.12.12_x64.exe             release-assets/SHA256SUMS.txt             --repo "${GITHUB_REPOSITORY}"             --target "4d2e922f3c8ff9c49bd405ab28dac348cf6515f7"             --title "Readest AccurateStats 0.12.12"             --notes-file release-notes.md             --prerelease
