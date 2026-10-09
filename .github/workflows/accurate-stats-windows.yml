@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: accurate-stats-windows-x64
+  cancel-in-progress: true
+
 jobs:
   windows-x64:
     runs-on: windows-latest
