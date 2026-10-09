@@ -35,6 +35,10 @@ jobs:
         run: pnpm --filter @readest/readest-app setup-vendors
 
       - name: Test reading statistics
+        env:
+          # Harmless local test values; the tests never contact Supabase.
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_ANON_KEY: local-test-anon-key
         run: pnpm --filter @readest/readest-app exec vitest run src/__tests__/statistics/ReadingStatsTracker.test.tsx src/__tests__/statistics/trackerCore.test.ts
 
       - name: Type check and lint
