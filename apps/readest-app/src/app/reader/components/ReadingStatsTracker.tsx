@@ -131,8 +131,9 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
   };
 
   const openPageAt = (info: { current?: number; total: number } | undefined) => {
-    if (!info || !focusedRef.current || document.visibilityState === 'hidden' || ttsPlayingRef.current)
-      return;
+    const hiddenOutsideDesktop =
+      !appService?.isDesktopApp && document.visibilityState === 'hidden';
+    if (!info || !focusedRef.current || hiddenOutsideDesktop || ttsPlayingRef.current) return;
     void persist(coreRef.current.onPage((info.current ?? 0) + 1, info.total || 1, nowSec()));
     armIdle();
   };
@@ -176,9 +177,10 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
 
   const resume = () => openPageAt(getBookProgress(bookKey)?.pageinfo);
 
-  // Keep the existing visibility handling for web/mobile and as a desktop
-  // fallback. Resuming must open a fresh dwell even without a page turn.
+  // Web/mobile use document visibility. Desktop deliberately does not:
+  // Readest already treats visibilitychange as unreliable there.
   useEffect(() => {
+    if (appService?.isDesktopApp) return;
     const onVis = () => {
       if (document.visibilityState === 'hidden') pause();
       else if (focusedRef.current) resume();
@@ -186,7 +188,7 @@ export default function ReadingStatsTracker({ bookKey }: { bookKey: string }) {
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookKey, bookMd5]);
+  }, [appService?.isDesktopApp, bookKey, bookMd5]);
 
   // On desktop, visibilitychange is unreliable for Alt+Tab and minimizing.
   // Use the native window focus state, including its initial value.
