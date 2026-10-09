@@ -404,7 +404,10 @@ fn compute_updater_disabled(
 
 #[cfg(desktop)]
 fn updater_disabled() -> bool {
-    let env_disable = std::env::var("READEST_DISABLE_UPDATER").is_ok();
+    // Runtime opt-out is kept for normal builds. option_env! also lets a
+    // personal build bake the opt-out into the single EXE at compile time.
+    let env_disable = std::env::var("READEST_DISABLE_UPDATER").is_ok()
+        || option_env!("READEST_DISABLE_UPDATER").is_some();
     #[cfg(target_os = "linux")]
     {
         let is_flatpak =
